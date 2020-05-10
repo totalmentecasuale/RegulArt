@@ -2,8 +2,12 @@
 
 ### Group:
 * [De Luca Giorgio](mailto:giorgio.deluca@mail.polimi.it)
-* [Pizzasegola Virginia](mailto:no)
+* [Pizzasegola Virginia](mailto:virginia.pizzasegola@mail.polimi.it)
 * [Segato Fabio](mailto:fabio1.segato@mail.polimi.it)
+
+## Video Presentation:
+
+![placeholder](link_to_vid.com)
 
 ## Abstract
 ### Short summary
@@ -25,7 +29,13 @@ Due to limited resources we tested our application on a laptop using its integra
 * Particle systems
 * Swarm Intelligence
 * Clustering
-
+## Dependencies
+* PyAudio
+* Numpy
+* Scipy
+* PythonOSC
+* Scikit-learn
+ 
 ## How to use it
 1. Run the python scripts (order is not relevant)
 2. Run the processing script, to install Processing go to their [website](https://processing.org/)
