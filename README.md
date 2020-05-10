@@ -30,11 +30,11 @@ Due to limited resources we tested our application on a laptop using its integra
 * Swarm Intelligence
 * Clustering
 ## Dependencies
-* [PyAudio]https://pypi.org/project/PyAudio/
-* [Numpy]https://numpy.org/
-* [Scipy]https://www.scipy.org/
-* [PythonOSC]https://pypi.org/project/python-osc/
-* [Scikit-learn]https://scikit-learn.org/stable/
+* [PyAudio](https://pypi.org/project/PyAudio/)
+* [Numpy](https://numpy.org/)
+* [Scipy](https://www.scipy.org/)
+* [PythonOSC](https://pypi.org/project/python-osc/)
+* [Scikit-learn](https://scikit-learn.org/stable/)
  
 ## How to use it
 1. Run the python scripts (order is not relevant)
