@@ -6,8 +6,8 @@
 * [Segato Fabio](mailto:fabio1.segato@mail.polimi.it)
 
 ## Video Presentation:
+[![Video](https://i.imgur.com/cc4bdR5.png)](https://www.youtube.com/embed/6iZPvVQ2qWM)
 
-![placeholder](link_to_vid.com)
 
 ## Abstract
 ### Short summary
