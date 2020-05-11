@@ -35,6 +35,7 @@ Due to limited resources we tested our application on a laptop using its integra
 * [Scipy](https://www.scipy.org/)
 * [PythonOSC](https://pypi.org/project/python-osc/)
 * [Scikit-learn](https://scikit-learn.org/stable/)
+* [OpenCV](https://github.com/atduskgreg/opencv-processing)
  
 ## How to use it
 1. Run the python scripts (order is not relevant)
