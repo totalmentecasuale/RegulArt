@@ -57,8 +57,8 @@ float fluxM = 0.5;
 float clustM = 1.5;
 
 //Limitazione delle forze e delle velocità nei due comportamenti (regolare e non regolare)
-float maxSpeedIR = 10.0;
-float maxForceIR = 1.0;
+float maxSpeedIR = 20.0;
+float maxForceIR = 3.5;
 float maxSpeedR = 20.0;
 float maxForceR = 1.5;
 
@@ -70,6 +70,7 @@ List<Integer> availableSpots;
 
 void setup(){
   fullScreen();
+  pixelDensity(1);
   a = new Agent();
   pointGravityList = new ArrayList<GravityPoint>();
   vectors = new ArrayList<PVector>();
@@ -86,7 +87,7 @@ void setup(){
   cam.start();
   colorMode(RGB);
   background(0);
-  MAX_PARTICLES = 729;
+  MAX_PARTICLES = 625;
   availableSpots = new ArrayList<Integer>();
   for(int i = 0; i < MAX_PARTICLES; i++){
      availableSpots.add(i); 
@@ -125,72 +126,70 @@ void draw(){
   }
   
   
-  if(particles.size() < MAX_PARTICLES){
-    //==================================================//
-    //  Generazione nuove particelle  //
-    //==================================================//
-    List<PVector> velPixels = new ArrayList<PVector>();
-    List<PVector> movPixels = new ArrayList<PVector>();
-    List<Integer> colPixels = new ArrayList<Integer>();
-    
-    //per ogni pixel dell'immagine corrente
-    
-    for(int x=0; x < cam_w - step && available; x = min(x+step, cam_w)){
-      for(int y=0; y < cam_h - step && available; y = min(y+step, cam_h)){
+  //==================================================//
+  //  Generazione nuove particelle  //
+  //==================================================//
+  List<PVector> velPixels = new ArrayList<PVector>();
+  List<PVector> movPixels = new ArrayList<PVector>();
+  List<Integer> colPixels = new ArrayList<Integer>();
+  
+  //per ogni pixel dell'immagine corrente
+  
+  for(int x=0; x < cam_w - step && available; x = min(x+step, cam_w)){
+    for(int y=0; y < cam_h - step && available; y = min(y+step, cam_h)){
+      
+      //Calcoliamo il flusso presente nell'immagine
+      PVector d = opencv.getAverageFlowInRegion(x,y,step,step);
+      
+      // soglia per generazione
+      if(d.magSq() > 2){
+        //Se oltre la soglia (c'è movimento in quel pixel)
+        int loc = x + y * cam_w; // Step 1, what is the 1D pixel location 
+        color fgColor = cam.pixels[loc]; // Step 2, what is the foreground color
+        color bgColor = backgroundImage.pixels[loc]; // Step 3, what is the background color 
+        float r1 = red(fgColor); // Step 4, compare the foreground and background color 
+        float g1 = green(fgColor); 
+        float b1 = blue(fgColor); 
+        float r2 = red(bgColor); 
+        float g2 = green(bgColor); 
+        float b2 = blue(bgColor); 
+        float diff = dist(r1, g1, b1, r2, g2, b2); 
         
-        //Calcoliamo il flusso presente nell'immagine
-        PVector d = opencv.getAverageFlowInRegion(x,y,step,step);
-        
-        // soglia per generazione
-        if(d.magSq() > 2){
-          //Se oltre la soglia (c'è movimento in quel pixel)
-          int loc = x + y * cam_w; // Step 1, what is the 1D pixel location 
-          color fgColor = cam.pixels[loc]; // Step 2, what is the foreground color
-          color bgColor = backgroundImage.pixels[loc]; // Step 3, what is the background color 
-          float r1 = red(fgColor); // Step 4, compare the foreground and background color 
-          float g1 = green(fgColor); 
-          float b1 = blue(fgColor); 
-          float r2 = red(bgColor); 
-          float g2 = green(bgColor); 
-          float b2 = blue(bgColor); 
-          float diff = dist(r1, g1, b1, r2, g2, b2); 
-          
-          //Confrontiamo il valore di differenza con quello dell'immagine del background:
-          // nel caso di background sia fissato dall'utente, aumenta la precisione 
-          // della generazione generando meno particelle
-          if(!update && diff > thresholdBack){
-            float x_new = map(x, 0, cam_w, 0, width);
-            float y_new = map(y, 0, cam_h, 0, height);
-            PVector p = new PVector(x_new,y_new);
-            vectors.add(p);
-            movPixels.add(p);
-            velPixels.add(d);
-            colPixels.add(color(r1,g1,b1));
-          } 
-        }
+        //Confrontiamo il valore di differenza con quello dell'immagine del background:
+        // nel caso di background sia fissato dall'utente, aumenta la precisione 
+        // della generazione generando meno particelle
+        if(!update && diff > thresholdBack){
+          float x_new = map(x, 0, cam_w, 0, width);
+          float y_new = map(y, 0, cam_h, 0, height);
+          PVector p = new PVector(x_new,y_new);
+          vectors.add(p);
+          movPixels.add(p);
+          velPixels.add(d);
+          colPixels.add(color(r1,g1,b1));
+        } 
       }
     }
-    
-    //Al fine di garantire una generazione di nuove particelle su tutta la superficie mostrata,
-    //applichiamo uno shuffle alle nuove particelle in modo che l'inserimento nel particle system di queste non
-    //dipenda dalla posizione che esse occupano all'interno dello schermo
-    //Il fatto che l'array delle velocità e dei colori non abbiano lo stesso ordine non comporta un problema 
-    //di grande entità, dato che il comportamento risulta conforme a quello previsto nel loop immediatamente successivo.
-    Collections.shuffle(movPixels);
-    
-    
-    //Scorriamo inoltre tutto l'array tenendo conto della densità delle nuove particelle rispetto al valore massimo ammesso 
-    // dal particle system
-    for(int i = 0; 
-        i < movPixels.size(); 
-        i = min(i + 1 + (movPixels.size() / MAX_PARTICLES),
-                movPixels.size())){
-      PVector p = movPixels.get(i);
-      if(!availableSpots.isEmpty() && particles.size() < MAX_PARTICLES){
-        Integer spot_idx = availableSpots.remove((int)random(availableSpots.size()));
-        particles.add(new Particle(p,spot_idx, colPixels.get(i), velPixels.get(i), reg));
-      } 
-    }
+  }
+  
+  //Al fine di garantire una generazione di nuove particelle su tutta la superficie mostrata,
+  //applichiamo uno shuffle alle nuove particelle in modo che l'inserimento nel particle system di queste non
+  //dipenda dalla posizione che esse occupano all'interno dello schermo
+  //Il fatto che l'array delle velocità e dei colori non abbiano lo stesso ordine non comporta un problema 
+  //di grande entità, dato che il comportamento risulta conforme a quello previsto nel loop immediatamente successivo.
+  Collections.shuffle(movPixels);
+  
+  
+  //Scorriamo inoltre tutto l'array tenendo conto della densità delle nuove particelle rispetto al valore massimo ammesso 
+  // dal particle system
+  for(int i = 0; 
+      i < movPixels.size(); 
+      i = min(i + 1 + (movPixels.size() / MAX_PARTICLES),
+              movPixels.size())){
+    PVector p = movPixels.get(i);
+    if(!availableSpots.isEmpty() && particles.size() < MAX_PARTICLES){
+      Integer spot_idx = availableSpots.remove((int)random(availableSpots.size()));
+      particles.add(new Particle(p,spot_idx, colPixels.get(i), velPixels.get(i), reg));
+    } 
   }
    
   //==================================================//
@@ -291,8 +290,9 @@ void oscEvent(OscMessage msg) {
   { 
     reg= msg.get(0).intValue() == 1;
     float volume_py = msg.get(1).floatValue();
-    curr_volume = constrain(curr_volume + (volume_py - curr_volume) * 0.6, 0, 1);
-    if(curr_volume < 0.05){
+    curr_volume = constrain(curr_volume + (volume_py - curr_volume) * 0.3, 0, 1);
+    //println(msg.get(0).intValue(), curr_volume);
+    if(curr_volume < 0.1){
       reg = false;  
     }
   }
