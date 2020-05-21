@@ -1,241 +1,190 @@
-import pyaudio
 import numpy as np
-from scipy.fftpack import fft, ifft
+import pyaudio
+from numpy.lib import stride_tricks
+from scipy.signal import lfilter, lfilter_zi, butter
 from pythonosc import udp_client
-import math
+from scipy.spatial import distance
 
 
-class AgentRepetition():
-    def __init__(self,
-                 ip="127.0.0.1",
-                 port_out=58121,
-                 name_out="/soundRepetition",
-                 CHANNELS=1,  # canale mono
-                 RATE=8000,  # rate= samples per second -->
-                 # 8k anzichè il solito 44100 per velocizzare (aiuta anche a trovare ripetizioni)
-                 FORMAT=pyaudio.paInt16,  # audio format:here it stores those sample data as a 16-bit integer value.
-
-                 # ---USER PARAMETERS
-                 msec=50,  # millisecondi da leggere
-                 sec_investigate=0.5,  # grandezza del buffer che viene riempito da segmenti di msec
-                 saved_exec=10):  # lunghezza buffer con i risulati delle correlazioni --> per falsi positivi/negativi
-
-        # millisecondi da comparare con sec TRASFORMA IN MILLISEC
-        last_msec = msec
-        # i chunk calcolati così per avere sempre una potenza di 2
-        CHUNK = pow(2, math.ceil(math.log(RATE * (msec / 1000), 2)))
-        # num esatto di frames in ogni secondo
-        n_frames_s = int(math.ceil(RATE / CHUNK))
-        # num esatto di frames del segnale base in ogni MILLIsecondi
-        n_f_ms = int(math.ceil((msec / pow(10, 3)) * n_frames_s))
-        # num esatto di frames del segnale da ricare in quello base in ogni MILLIsecondi
-        n_f_last_ms = int(math.ceil((last_msec / pow(10, 3)) * n_frames_s))
-
-        p = pyaudio.PyAudio()
-
-        # Apertura stream del microfono
-        stream = p.open(
-            format=FORMAT,
-            channels=CHANNELS,
-            rate=RATE,
-            input=True,
-            output=True,
-            frames_per_buffer=CHUNK
-        )
-
-        self.name_out = name_out
-
-        # Definizione della porta di output
-        self.client = udp_client.SimpleUDPClient(ip, port_out)
-
-        print('stream started')
-
-        i = 0
-
-        # variabili di appoggio
-        maxVol = 1
-        minVol = 0
-        volume = 0
-        presenceOfSound = False
-
-        # Variabile di appoggio relativa all'ultimo messaggio inviato
-        last_msg = False
-
-        repetition = False
-
-        rep_saved = np.array(repetition)
-
-        # il numero totale di elementi su cui fare la corr è dato da quanti segmenti da msec ci sono in sec_investigate
-        # pow(10,-3) è fatto per passare millisecondi a secondi
-        tot_elms_in_whole_audio = int(sec_investigate / (msec * pow(10, -3)))
-
-        while True:
-            # Se il buffer non è pieno, leggi il primo blocco da confrontare con il successivo
-            if i == 0:
-
-                # il buff è composto da un numero di elementi pari a tot_elms_in_whole_audi
-                # in ognuno di questi elementi salvo un array di dati presi dallo stream audio e lunghi msec
-
-                for jj in range(0, tot_elms_in_whole_audio):
-                    # salvo il numero di millisecondi richiesti dall'utente nel segnale bas
-                    for j in range(0, n_f_ms):
-                        data = stream.read(CHUNK, exception_on_overflow=False)
-                        data = np.frombuffer(data, dtype=np.int16)
-
-                        # calcolo ampiezza
-                        # ovviamente linalg.norm(data) trova la norma dell'array
-                        volume = int((np.linalg.norm(data) * 10) / (math.pow(10, 3)))
-
-                        # Aggiorniamo il valore del volume massimo in cui quello attuale supera il valore massimo corrente
-                        if volume > maxVol:
-                            maxVol = volume
-                            # min vol si aggiorna in modo dinamico (0.005 trovato empiricamente)
-                            minVol = maxVol * 0.005
-
-                        # Verifichiamo che le condizioni di volume garantiscano la presenza di suono
-                        if volume < minVol:
-                            presenceOfSound = False
-                        else:
-                            presenceOfSound = True
-
-                        # cambio dinmesione dati per poterli aggiungere a frames (e quindi anche a whole audio)
-                        data_to_append = np.reshape(data, (1, CHUNK))
-
-                        # frames= frammenti di msec che sto leggendo ora
-                        if (j == 0):
-                            frames = np.array(data, ndmin=2)
-
-                        else:
-                            frames = np.append(frames, data_to_append, axis=1)
-
-                    # Salviamo i dati correnti nell'array contenente le esecuzioni da confrontare
-                    if jj == 0:
-                        whole_audio = frames
-                    else:
-                        whole_audio = np.append(whole_audio, frames, axis=0)
-                i += 1
+# Constants
+FORMAT = pyaudio.paFloat32
+CHANNELS = 1
+RATE = 44100
+CHUNK = 2048
+RECORD_SECONDS = 0.1
+# Number of windows to analyse
+win_no = 10
+ip = "127.0.0.1"
+port_out = 58121
+name_out = "/soundRepetition"
+max_rms = None
+#Thresholds
+corr_thresh = 0.75
+regularity_thresh = 0.005
 
 
-            # Se sono presenti abbastanza esecuzioni, valutiamo se c'è corrispondenza negli ultimi secondi specificati
-            # dal parametro sec_investigate per vedere se c'è correlazione in uno degli slot
-            else:
-                k = 0
+#Regularity definition
+def calculate_regularity(features_list, prev_feature_list):
+    msg_to_processing = 0
 
-                # Acquisiamo i dati correnti dal microfono e ripetiamo il processo di inizializzazione sopra
-                for ii in range(0, n_f_last_ms):
-                    # ( n_f_last_ms corrisponde ad un chunck da msec)
-                    data = stream.read(CHUNK, exception_on_overflow=False)
-                    data = np.frombuffer(data, dtype=np.int16)
+    res_corr = features_list[5]
+    if res_corr > corr_thresh:
+        msg_to_processing = 1
+    else:
+        norm_now_features = features_list / np.linalg.norm(features_list)
+        norm_prev_features = [fv / np.linalg.norm(fv) for fv in prev_feature_list]
+        dist_vect_features = np.min([distance.euclidean(norm_now_features, dist_prev_fv) for dist_prev_fv in norm_prev_features])
 
-                    volume = int((np.linalg.norm(data) * 10) / (math.pow(10, 3)))
-                    if volume > maxVol:
-                        maxVol = volume
-                        minVol = maxVol * 0.005
+        if dist_vect_features < regularity_thresh and res_corr > corr_thresh / 2:
+            msg_to_processing = 1
 
-                    if volume < minVol:
-                        presenceOfSound = False
-                    else:
-                        presenceOfSound = True
+    return msg_to_processing
 
-                    if k == 0:
-                        last_frames = np.array(data, ndmin=2)
-                    else:
-                        data_to_append_lf = np.reshape(data, (1, CHUNK))
-                        last_frames = np.append(last_frames, data_to_append_lf, axis=1)
-                    k += 1
+#Performing short-time fourier transform
+def stft(sig, frameSize, overlapFac=0.5, window=np.hanning):
+    win = window(frameSize)
+    hopSize = int(frameSize - np.floor(overlapFac * frameSize))
 
-                    # array per il salvataggio del risultato dell'autocorrelazione
-                    corr_vect = np.array(0, ndmin=2)
+    # zeros at beginning (thus center of 1st window should be for sample nr. 0)
+    samples = np.append(np.zeros(int(np.floor((frameSize/2)))), sig)
+    # cols for windowing
+    cols = int(np.ceil( (len(samples) - frameSize) / float(hopSize))) + 1
+    # zeros at end (thus samples can be fully covered by frames)
+    samples = np.append(samples, np.zeros(frameSize))
 
-                    # Per ogni esecuzione presente nell'array contenente le esecuzioni passate
-                    for hh in range(0, np.size(whole_audio, 0)):
+    frames = stride_tricks.as_strided(samples, shape=(cols, frameSize), strides=(samples.strides[0]*hopSize, samples.strides[0])).copy()
+    frames *= win
 
-                        # faccio la correlazione tra una riga di whole audio (un segmento da msec) e l'array di last_frame
-                        # e poi passo alla riga successiva di whole audio
-                        corr = correlation(whole_audio[hh, :], last_frames[0, :])
+    return np.fft.rfft(frames)
 
-                        # Salviamo il risultato
-                        if hh == 0:
-                            corr_vect = np.array(corr, ndmin=2)
-
-                        else:
-                            corr = np.reshape(corr, (1, len(corr)))
-                            corr_vect = np.append(corr_vect, corr, axis=1)
-
-                    # per vedere se c'è ripetizione calcolo la media dei vettori risulanti
-                media = corr_vect.mean()
-
-                # Definiamo se c'è o meno ripetizione valutando la presenza di suono e confrontando la media con una soglia
-                # 0.2 è stato trovato empiricamente
-                if media > 0.2 and volume > minVol:
-                    repetition = True
-                else:
-                    repetition = False
-
-                # Processo per gestire falsi positivi e falsi negativi
-                fn = 0
-                fp = 0
-                # di default nel messaggio inviato c'è un valore pari a quello di repetition
-                rep_to_send = repetition
-
-                # quando ho salvato un numero di risulati pari a quelli richiesti per verificare
-                if rep_saved.size == saved_exec:
-                    # Controlla ogni esecuzione
-                    for a in range(rep_saved.size):
-                        # Aggiorna le variabili relative a risultati negativi e positivi
-                        if not rep_saved[a]:
-                            fn += 1
-
-                        # Nel caso dei risultati positivi, guarda solo la porzione finale pari al 20% della lunghezza dell'array, in modo da essere più reattivo
-                        elif a >= rep_saved.size - int(saved_exec / 5):
-                            fp += 1
-
-                    # se la porzione relativa al 20% dell'array di risultati risulta avere tutti true, mando true
-                    if fp == int(saved_exec / 5):
-                        rep_to_send = True
-                        # se tutto l'array è pieno di false, mando false anche se è arrivato true
-                    elif fn == saved_exec:
-                        rep_to_send = False
-                    # in tutti gli altri casi non cambiare il messaggio inviato precedentemente
-                    else:
-                        rep_to_send = last_msg
-
-                    print(rep_to_send, presenceOfSound, rep_saved)
-
-                # salvo il nuovo valore della ripetizione (NON modificato)
-                rep_saved = np.append(rep_saved, repetition)
-
-                # Esegui uno slice dell'array nel caso in cui la grandezza massima sia stata raggiunta
-                if rep_saved.size > saved_exec:
-                    rep_saved = rep_saved[1:]
-
-                whole_audio = np.append(whole_audio, last_frames, axis=0)
-                whole_audio = whole_audio[1:, :]
-                last_msg = rep_to_send
-
-                if rep_to_send:
-                    msg_rep = 1
-                else:
-                    msg_rep = 0
-
-                # Invia il messaggio a Processing comunicando qual è il risultato della correlazione e la porzione di volume attuale sul massimo volume
-                self.client.send_message(self.name_out, [msg_rep, float(volume / maxVol)])
+#Filter definition
+def butter_bandpass(lowcut=40, highcut=2000, fs=RATE, order=2):
+    nyq = 0.5 * fs
+    low = lowcut / nyq
+    high = highcut / nyq
+    b, a = butter(order, [low, high], btype='band')
+    return b, a
 
 
-def correlation(x, y):
-    c = ifft(fft(x) * np.conj(fft(y))) / (np.linalg.norm(x) * np.linalg.norm(y))
-    # per ogni elemento dell'array c, si trova la norma per poter poi calcolare la media
-    for h in range(0, len(c)):
-        r = np.real(c[h])
-        r = pow(r, 2)
-        i = np.imag(c[h])
-        i = pow(i, 2)
-        c[h] = pow(r + i, 1 / 2)
-
-    return c
+#Applying filter to the signal
+def butter_bandpass_filter(data, b, a):
+    zi = lfilter_zi(b, a)
+    y = lfilter(b, a, data, zi=zi*data[0])
+    return y
 
 
-if __name__ == "__main__":
-    agent = AgentRepetition()
+# Performing zero crossing rate
+def zero_crossing_rate(wavedata):
+    return np.nan_to_num(np.asarray(0.5 * np.mean(np.abs(np.diff(np.sign(wavedata[:]))))))
+
+# Performing RMS
+def root_mean_square(wavedata):
+    rms = np.asarray(np.sqrt((np.mean(wavedata[:] ** 2))))
+
+    return np.nan_to_num(rms)
+
+# Performing spectral centroid
+def spectral_centroid(magnitude_spectrum):
+
+    timebins, freqbins = np.shape(magnitude_spectrum)
+    sc = []
+
+    for t in range(timebins-1):
+        power_spectrum = np.abs(magnitude_spectrum[t])**2
+        sc_t = np.sum(power_spectrum * np.arange(1,freqbins+1)) / np.sum(power_spectrum)
+        sc.append(sc_t)
+
+    sc = np.nan_to_num(sc)
+
+    return sc[0]
+
+# Performing spectral rolloff
+def spectral_rolloff(magnitude_spectrum, sample_rate=RATE, k=0.85):
+
+    # convert to frequency domain
+    power_spectrum = np.abs(magnitude_spectrum)**2
+    timebins, freqbins = np.shape(magnitude_spectrum)
+
+    sr = []
+    spectralSum = np.sum(power_spectrum, axis=1)
+
+    for t in range(timebins-1):
+        # find frequency-bin indeces where the cummulative sum of all bins is higher
+        # than k-percent of the sum of all bins. Lowest index = Rolloff
+        sr_t = np.where(np.cumsum(power_spectrum[t,:]) >= k * spectralSum[t])[0][0]
+        sr.append(sr_t)
+
+    sr = np.asarray(sr).astype(float)
+    # convert frequency-bin index to frequency in Hz
+    sr = (sr / freqbins) * (sample_rate / 2.0)
+
+    return np.nan_to_num(sr[0])
+
+# Performing spectral flux
+def spectral_flux(magnitude_spectrum):
+
+    # convert to frequency domain
+    timebins, freqbins = np.shape(magnitude_spectrum)
+
+    sf = np.sqrt(np.sum(np.diff(np.abs(magnitude_spectrum))**2, axis=1)) / freqbins
+
+    return np.nan_to_num(sf[1:][0])
+
+# Performing normalised cross-correlation
+def norm_corr(a, filt_data):
+    a_norm = a / np.linalg.norm(a)
+    b_norm = filt_data / np.linalg.norm(filt_data)
+    c = np.corrcoef(a_norm, b_norm)
+    return c[0][1]
+
+def compute(data, bp_b, bp_a):
+    signal_sftf = stft(data, CHUNK);
+    zcr = zero_crossing_rate(data)
+    rms = root_mean_square(data)
+    sc = spectral_centroid(signal_sftf)
+    sr = spectral_rolloff(signal_sftf)
+    sf = spectral_flux(signal_sftf)
+    res_corr = 0
+    filtered_temp, zo = butter_bandpass_filter(data, bp_b, bp_a)
+    if prev_frames:
+        corr_temp = [norm_corr(prev, filtered_temp) for prev in prev_frames]
+        if len(corr_temp) > 0: res_corr = np.max(corr_temp)
+    return [zcr, rms, sc, sr, sf, res_corr], filtered_temp
 
 
+audio = pyaudio.PyAudio()
+
+# start Recording
+stream = audio.open(format=FORMAT, channels=CHANNELS,
+                    rate=RATE, input=True,
+                    frames_per_buffer=CHUNK)
+print("recording...")
+
+
+prev_frames = []
+# Bandpass filter coefficients
+bp_b, bp_a = butter_bandpass()
+prev_feature_vect = []
+
+client = udp_client.SimpleUDPClient(ip, port_out)
+
+while True:
+    for i in range(0, int(RATE / CHUNK * RECORD_SECONDS)):
+        frames = stream.read(CHUNK, exception_on_overflow=False)
+        data = np.frombuffer(frames, dtype=np.float32)
+
+    features, filtered_data = compute(data, bp_b, bp_a)
+    prev_frames.append(filtered_data)
+    if len(prev_frames) > win_no: prev_frames = prev_frames[1:]
+
+    if prev_feature_vect:
+        msg = calculate_regularity(features, prev_feature_vect)
+        rms = features[1]
+
+        if not max_rms or rms > max_rms:
+            max_rms = rms
+
+        client.send_message(name_out, [msg, float(rms/max_rms)])
+
+    prev_feature_vect.append(features)
+    if len(prev_feature_vect) > win_no: prev_feature_vect = prev_feature_vect[1:]
