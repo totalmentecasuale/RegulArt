@@ -2,7 +2,6 @@
 
 ### Group:
 * [De Luca Giorgio](mailto:giorgio.deluca@mail.polimi.it)
-* [Pizzasegola Virginia](mailto:virginia.pizzasegola@mail.polimi.it)
 * [Segato Fabio](mailto:fabio1.segato@mail.polimi.it)
 
 ## Video Presentation:
@@ -29,6 +28,8 @@ Due to limited resources we tested our application on a laptop using its integra
 * Particle systems
 * Swarm Intelligence
 * Clustering
+* MIR features
+
 ## Dependencies
 * [PyAudio](https://pypi.org/project/PyAudio/)
 * [Numpy](https://numpy.org/)
