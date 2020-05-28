@@ -1,7 +1,7 @@
 import numpy as np
 import pyaudio
 from numpy.lib import stride_tricks
-from scipy.signal import lfilter, lfilter_zi, butter
+from scipy.signal import lfilter, lfilter_zi, butter, stft
 from pythonosc import udp_client
 from scipy.spatial import distance
 
@@ -39,23 +39,6 @@ def calculate_regularity(features_list, prev_feature_list):
             msg_to_processing = 1
 
     return msg_to_processing
-
-#Performing short-time fourier transform
-def stft(sig, frameSize, overlapFac=0.5, window=np.hanning):
-    win = window(frameSize)
-    hopSize = int(frameSize - np.floor(overlapFac * frameSize))
-
-    # zeros at beginning (thus center of 1st window should be for sample nr. 0)
-    samples = np.append(np.zeros(int(np.floor((frameSize/2)))), sig)
-    # cols for windowing
-    cols = int(np.ceil( (len(samples) - frameSize) / float(hopSize))) + 1
-    # zeros at end (thus samples can be fully covered by frames)
-    samples = np.append(samples, np.zeros(frameSize))
-
-    frames = stride_tricks.as_strided(samples, shape=(cols, frameSize), strides=(samples.strides[0]*hopSize, samples.strides[0])).copy()
-    frames *= win
-
-    return np.fft.rfft(frames)
 
 #Filter definition
 def butter_bandpass(lowcut=40, highcut=2000, fs=RATE, order=2):
@@ -138,7 +121,7 @@ def norm_corr(a, filt_data):
     return c[0][1]
 
 def compute(data, bp_b, bp_a):
-    signal_sftf = stft(data, CHUNK);
+    signal_sftf = stft(data, CHUNK)[2];
     zcr = zero_crossing_rate(data)
     rms = root_mean_square(data)
     sc = spectral_centroid(signal_sftf)
